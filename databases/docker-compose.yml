@@ -1,0 +1,22 @@
+services:
+  data-generator_postgres:
+    image:  ${CI_REGISTRY_IMAGE}:${VERSION}
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    # restart: unless-stopped
+    read_only: false # Rendre le conteneur en lecture seule
+    security_opt:
+      - no-new-privileges:true # Empêcher l'escalade de privilèges
+    cap_drop:
+      - ALL                             # Supprime toutes les capacités inutiles
+    cap_add:
+      - NET_BIND_SERVICE                # Ajoute uniquement la capacité de binder un port réseau
+    mem_limit: 2.5g
+    cpu_shares: 512
+
+networks:
+  default:
+    name: dataGenerator
+    external: true

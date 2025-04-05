@@ -1,0 +1,195 @@
+# .gitlab-ci.yml
+stages:
+  - build
+  - sonar
+  - deploy_image_to_registry
+  - container_scanning
+  - cleanup
+  - deploy_app
+
+default:
+  image: docker:24.0.5
+  services:
+    - name: docker:24.0.5-dind
+      alias: docker
+      command: [ "--tls=false" ]
+
+# Variables d'environnement
+variables:
+  NODE_ENV: production
+  DOCKER_HOST: tcp://docker:2375
+  DOCKER_TLS_CERTDIR: ""
+
+# Job pour construire l'application
+build:
+  stage: build
+  image: node:22-alpine
+  before_script:
+    # Installer PNPM manuellement sans Corepack
+    - npm install -g pnpm@9
+    - pnpm --version
+    - pnpm config set store-dir .pnpm-store
+  script:
+    - pnpm install
+    - pnpm run build
+  artifacts:
+    paths:
+      - .output
+  cache:
+    key:
+      files:
+        - pnpm-lock.yaml
+    paths:
+      - .pnpm-store
+
+
+# Job pour analyser le code avec SonarQube
+sonarqube_scan:
+  stage: sonar
+  image: 
+    name: sonarsource/sonar-scanner-cli:5.0
+    entrypoint: [""]
+  variables:
+    SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"  # Defines the location of the analysis task cache
+    GIT_DEPTH: "0"  # Tells git to fetch all the branches of the project, required by the analysis task
+  cache:
+    key: "${CI_JOB_NAME}"
+    paths:
+      - .sonar/cache
+  script: 
+    - sonar-scanner
+  allow_failure: true
+
+# Job pour créer l'image Docker et la déployer
+deploy_image_to_registry:
+  stage: deploy_image_to_registry
+  script:
+    - export VERSION=$(echo "$CI_COMMIT_REF_SLUG" | tr '[:upper:]' '[:lower:]')
+    - docker build -t $CI_REGISTRY_IMAGE:$VERSION .
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker push $CI_REGISTRY_IMAGE:$VERSION
+
+container_scanning:
+  stage: container_scanning
+  variables:
+    TRIVY_USERNAME: "$CI_REGISTRY_USER"
+    TRIVY_PASSWORD: "$CI_REGISTRY_PASSWORD"
+    TRIVY_AUTH_URL: "$CI_REGISTRY"
+    TRIVY_NO_PROGRESS: "true"
+    TRIVY_CACHE_DIR: ".trivycache/"
+  before_script:
+    - apk add --no-cache curl
+    - curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+  script:
+    - export VERSION=$(echo "$CI_COMMIT_REF_SLUG" | tr '[:upper:]' '[:lower:]')
+    - FULL_IMAGE_NAME="$CI_REGISTRY_IMAGE:$VERSION"
+    - trivy --version
+    # - trivy image --download-db-only
+    - trivy image --exit-code 0 "$FULL_IMAGE_NAME"
+    - trivy image --exit-code 1 --severity CRITICAL "$FULL_IMAGE_NAME"
+  cache:
+    paths:
+      - .trivycache/
+  allow_failure: true
+
+# Étape manuelle pour nettoyer
+cleanup_image:
+  stage: cleanup
+  rules:
+    - if: $CI_COMMIT_REF_NAME != $CI_DEFAULT_BRANCH
+  before_script:
+    - apk add --no-cache curl jq
+  script:
+    - |
+      export VERSION=$(echo "$CI_COMMIT_REF_SLUG" | tr '[:upper:]' '[:lower:]')
+      export REGISTRY_IMAGE="$CI_REGISTRY_IMAGE:$VERSION"
+      echo "Deleting image: $REGISTRY_IMAGE"
+      curl --header "PRIVATE-TOKEN: $GITLAB_ACCESS_TOKEN" \
+      --request DELETE \
+      "https://gitlab.com/api/v4/projects/${CI_PROJECT_ID}/registry/repositories/$(curl --silent --header "PRIVATE-TOKEN: $GITLAB_ACCESS_TOKEN" "https://gitlab.com/api/v4/projects/${CI_PROJECT_ID}/registry/repositories" | jq '.[] | select(.path=="'${CI_PROJECT_PATH}'") | .id')/tags/$VERSION"
+  when: manual
+  allow_failure: true  # L'étape ne fait pas échouer le pipeline en cas d'erreur
+
+deploy_recette:
+  stage: deploy_app
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache openssh-client
+    # Décodage de la clé privée et ajout des retours à la ligne
+    - mkdir -p ~/.ssh
+    - echo "$SSH_PRIVATE_KEY_DEPLOY" | tr -d '\r' | base64 -d > ~/.ssh/id_rsa
+    - chmod 600 ~/.ssh/id_rsa
+
+    # Ajout de l'hôte VPS dans les "known_hosts" pour éviter l'erreur "Host key verification failed"
+    - ssh-keyscan -p $SSH_PORT -H $VPS_HOST >> ~/.ssh/known_hosts
+  script:
+    # Variables pour le nom du groupe et du projet
+    - GROUP_NAME="$CI_PROJECT_NAMESPACE"
+    - PROJECT_NAME="$CI_PROJECT_NAME"
+    - DEPLOY_DIR="~/deployments"
+    - DEPLOY_DIR="$DEPLOY_DIR/$GROUP_NAME/$PROJECT_NAME"
+    - export VERSION=$(echo "$CI_COMMIT_REF_SLUG" | tr '[:upper:]' '[:lower:]')
+
+    # Créer le dossier de déploiement sur le VPS
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "mkdir -p $DEPLOY_DIR"
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "rm -rf $DEPLOY_DIR/*"
+
+    # Copier le fichier docker-compose.yml sur le VPS via SCP
+    - scp -P $SSH_PORT docker-compose.yml gitlab-deploy@$VPS_HOST:$DEPLOY_DIR/docker-compose.yml
+
+    # Utiliser docker-compose pour déployer les services
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY"
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "cd $DEPLOY_DIR && VERSION=$VERSION CI_REGISTRY_IMAGE=$CI_REGISTRY_IMAGE docker compose -f docker-compose.yml pull"
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "cd $DEPLOY_DIR && VERSION=$VERSION CI_REGISTRY_IMAGE=$CI_REGISTRY_IMAGE docker compose -f docker-compose.yml down"
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "cd $DEPLOY_DIR && VERSION=$VERSION CI_REGISTRY_IMAGE=$CI_REGISTRY_IMAGE docker compose -f docker-compose.yml up -d"
+  dependencies:
+    - build
+  environment:
+    name: recette
+    url: https://frontend.thepaut-antoine.ovh
+  only:
+    - branches
+  except:
+    - tags
+  when: manual
+
+deploy_prod:
+  stage: deploy_app
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache openssh-client
+    # Décodage de la clé privée et ajout des retours à la ligne
+    - mkdir -p ~/.ssh
+    - echo "$SSH_PRIVATE_KEY_DEPLOY" | tr -d '\r' | base64 -d > ~/.ssh/id_rsa
+    - chmod 600 ~/.ssh/id_rsa
+
+    # Ajout de l'hôte VPS dans les "known_hosts" pour éviter l'erreur "Host key verification failed"
+    - ssh-keyscan -p $SSH_PORT -H $VPS_HOST >> ~/.ssh/known_hosts
+  script:
+    # Variables pour le nom du groupe et du projet
+    - GROUP_NAME="$CI_PROJECT_NAMESPACE"
+    - PROJECT_NAME="$CI_PROJECT_NAME"
+    - DEPLOY_DIR="~/deployments"
+    - DEPLOY_DIR="$DEPLOY_DIR/$GROUP_NAME/$PROJECT_NAME"
+    - export VERSION=$(echo "$CI_COMMIT_REF_SLUG" | tr '[:upper:]' '[:lower:]')
+
+    # Créer le dossier de déploiement sur le VPS
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "mkdir -p $DEPLOY_DIR"
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "rm -rf $DEPLOY_DIR/*"
+
+    # Copier le fichier docker-compose.yml sur le VPS via SCP
+    - scp -P $SSH_PORT docker-compose.yml gitlab-deploy@$VPS_HOST:$DEPLOY_DIR/docker-compose.yml
+
+    # Utiliser docker-compose pour déployer les services
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY"
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "cd $DEPLOY_DIR && VERSION=$VERSION CI_REGISTRY_IMAGE=$CI_REGISTRY_IMAGE docker compose -f docker-compose.yml pull"
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "cd $DEPLOY_DIR && VERSION=$VERSION CI_REGISTRY_IMAGE=$CI_REGISTRY_IMAGE docker compose -f docker-compose.yml down"
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "cd $DEPLOY_DIR && VERSION=$VERSION CI_REGISTRY_IMAGE=$CI_REGISTRY_IMAGE docker compose -f docker-compose.yml up -d"
+  dependencies:
+    - build
+  environment:
+    name: production
+    url: https://frontend.thepaut-antoine.ovh
+  only:
+    - tags
+  when: manual

@@ -1,0 +1,40 @@
+{
+    email thepaut_antoine@outlook.fr
+}
+
+# Backend configuration
+backend.thepaut-antoine.ovh {
+    tls {
+        protocols tls1.2 tls1.3
+        ciphers TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 TLS_CHACHA20_POLY1305_SHA256
+        on_demand
+    }
+    reverse_proxy http://data-generator_backend:9090
+}
+
+# Frontend configuration
+frontend.thepaut-antoine.ovh {
+    reverse_proxy data-generator_frontend:3000
+    tls {
+        ca https://acme-v02.api.letsencrypt.org/directory
+    }
+}
+
+# Keycloak configuration
+keycloak.thepaut-antoine.ovh {
+    tls {
+        protocols tls1.2 tls1.3
+        ciphers TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 TLS_CHACHA20_POLY1305_SHA256
+        on_demand
+    }
+    reverse_proxy http://keycloak:8080
+}
+
+# Docker registry configuration
+docker-registry.thepaut-antoine.ovh {
+    reverse_proxy registry:5000
+     tls {
+        ca https://acme-v02.api.letsencrypt.org/directory
+    }
+}
+

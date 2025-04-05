@@ -1,0 +1,31 @@
+services:
+  data-generator_frontend:
+    image: ${CI_REGISTRY_IMAGE}:${VERSION}
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      AUTH_NO_SECRET: "SECRET"
+      NUXT_PUBLIC_BACKEND_API_URL: https://backend.thepaut-antoine.ovh
+      AUTH_ORIGIN: "https://frontend.thepaut-antoine.ovh/"
+      KEYCLOAK_CLIENT_ID: "CLIENT_ID_FRONTEND"
+      KEYCLOAK_CLIENT_SECRET: "CLIENT_SECRET"
+      KEYCLOAK_ISSUER: "https://keycloak.thepaut-antoine.ovh/realms/myrealm"
+    security_opt:
+      - no-new-privileges:true           # Empêche les processus d'obtenir des privilèges supplémentaires
+    cap_drop:
+      - ALL                             # Supprime toutes les capacités inutiles
+    cap_add:
+      - NET_BIND_SERVICE                # Ajoute uniquement la capacité de binder un port réseau
+    read_only: true                     # Rend le système de fichiers du conteneur en lecture seule
+    tmpfs:
+      - /tmp:size=64m                   # Répertoire temporaire sécurisé avec une limite de taille
+    mem_limit: 512m                     # Limite de mémoire
+    cpu_shares: 256                     # Priorité CPU relative
+    restart: unless-stopped             # Gère les redémarrages en cas d'erreur
+    user: "1000:1000"                   # Utilisateur non-root pour exécuter le conteneur
+
+networks:
+  default:
+    name: dataGenerator
+    external: true

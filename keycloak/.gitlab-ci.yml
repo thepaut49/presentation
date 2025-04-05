@@ -1,0 +1,127 @@
+default:
+  image: docker:24.0.5
+  services:
+    - docker:24.0.5-dind
+  before_script:
+    - docker info
+
+stages:
+  - container_scanning
+  - deploy_app
+
+variables:
+  # When using dind service, you must instruct docker to talk with the
+  # daemon started inside of the service. The daemon is available with
+  # a network connection instead of the default /var/run/docker.sock socket.
+  #
+  # The 'docker' hostname is the alias of the service container as described at
+  # https://docs.gitlab.com/ee/ci/docker/using_docker_images.html#accessing-the-services
+  #
+  # If you're using GitLab Runner 12.7 or earlier with the Kubernetes executor and Kubernetes 1.6 or earlier,
+  # the variable must be set to tcp://localhost:2375 because of how the
+  # Kubernetes executor connects services to the job container
+  # DOCKER_HOST: tcp://localhost:2375
+  #
+  DOCKER_HOST: tcp://docker:2375
+  #
+  # This instructs Docker not to start over TLS.
+  DOCKER_TLS_CERTDIR: ""
+  SKIP_TO_DEPLOY: "false" # Valeur par défaut
+
+container_scanning:
+  stage: container_scanning
+  variables:
+    TRIVY_USERNAME: "$CI_REGISTRY_USER"
+    TRIVY_PASSWORD: "$CI_REGISTRY_PASSWORD"
+    TRIVY_AUTH_URL: "$CI_REGISTRY"
+    TRIVY_NO_PROGRESS: "true"
+    TRIVY_CACHE_DIR: ".trivycache/"
+  before_script:
+    - apk add --no-cache curl
+    - curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+  script:
+    - FULL_IMAGE_NAME="quay.io/keycloak/keycloak:24.0"
+    - trivy --version
+    # - trivy image --download-db-only
+    - trivy image --exit-code 0 "$FULL_IMAGE_NAME"
+    - trivy image --exit-code 1 --severity CRITICAL "$FULL_IMAGE_NAME"
+  cache:
+    paths:
+      - .trivycache/
+  allow_failure: true
+
+deploy_recette:
+  stage: deploy_app
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache openssh-client
+    # Décodage de la clé privée et ajout des retours à la ligne
+    - mkdir -p ~/.ssh
+    - echo "$SSH_PRIVATE_KEY_DEPLOY" | tr -d '\r' | base64 -d > ~/.ssh/id_rsa
+    - chmod 600 ~/.ssh/id_rsa
+
+    # Ajout de l'hôte VPS dans les "known_hosts" pour éviter l'erreur "Host key verification failed"
+    - ssh-keyscan -p $SSH_PORT -H $VPS_HOST >> ~/.ssh/known_hosts
+  script:
+    # Variables pour le nom du groupe et du projet
+    - GROUP_NAME="$CI_PROJECT_NAMESPACE"
+    - PROJECT_NAME="$CI_PROJECT_NAME"
+    - DEPLOY_DIR="~/deployments"
+    - DEPLOY_DIR="$DEPLOY_DIR/$GROUP_NAME/$PROJECT_NAME"
+
+    # Créer le dossier de déploiement sur le VPS
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "mkdir -p $DEPLOY_DIR"
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "rm -rf $DEPLOY_DIR/*"
+
+    # Copier le fichier docker-compose.yml sur le VPS via SCP
+    - scp -P $SSH_PORT docker-compose.yml gitlab-deploy@$VPS_HOST:$DEPLOY_DIR/docker-compose.yml
+
+    # Utiliser docker-compose pour déployer les services
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "cd $DEPLOY_DIR && echo \"KC_DB_URL=$KC_DB_URL\" > .env &&  echo \"KC_DB_USERNAME=$KC_DB_USERNAME\" >> .env &&  echo \"KC_DB_PASSWORD=$KC_DB_PASSWORD\" >> .env &&  echo \"KEYCLOAK_ADMIN=$KEYCLOAK_ADMIN\" >> .env &&  echo \"KEYCLOAK_ADMIN_PASSWORD=$KEYCLOAK_ADMIN_PASSWORD\" >> .env"
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "cd $DEPLOY_DIR && docker compose -f docker-compose.yml --env-file .env pull"
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "cd $DEPLOY_DIR && docker compose -f docker-compose.yml --env-file .env down"
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "cd $DEPLOY_DIR && docker compose -f docker-compose.yml --env-file .env up -d && rm .env"
+  environment:
+    name: recette
+  only:
+    - branches
+  except:
+    - tags
+  when: manual
+
+deploy_prod:
+  stage: deploy_app
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache openssh-client
+    # Décodage de la clé privée et ajout des retours à la ligne
+    - mkdir -p ~/.ssh
+    - echo "$SSH_PRIVATE_KEY_DEPLOY" | tr -d '\r' | base64 -d > ~/.ssh/id_rsa
+    - chmod 600 ~/.ssh/id_rsa
+
+    # Ajout de l'hôte VPS dans les "known_hosts" pour éviter l'erreur "Host key verification failed"
+    - ssh-keyscan -p $SSH_PORT -H $VPS_HOST >> ~/.ssh/known_hosts
+  script:
+    # Variables pour le nom du groupe et du projet
+    - GROUP_NAME="$CI_PROJECT_NAMESPACE"
+    - PROJECT_NAME="$CI_PROJECT_NAME"
+    - DEPLOY_DIR="~/deployments"
+    - DEPLOY_DIR="$DEPLOY_DIR/$GROUP_NAME/$PROJECT_NAME"
+
+    # Créer le dossier de déploiement sur le VPS
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "mkdir -p $DEPLOY_DIR"
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "rm -rf $DEPLOY_DIR/*"
+
+    # Copier le fichier docker-compose.yml sur le VPS via SCP
+    - scp -P $SSH_PORT docker-compose.yml gitlab-deploy@$VPS_HOST:$DEPLOY_DIR/docker-compose.yml
+
+    # Utiliser docker-compose pour déployer les services
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "cd $DEPLOY_DIR && echo \"KC_DB_URL=$KC_DB_URL\" > .env &&  echo \"KC_DB_USERNAME=$KC_DB_USERNAME\" >> .env &&  echo \"KC_DB_PASSWORD=$KC_DB_PASSWORD\" >> .env &&  echo \"KEYCLOAK_ADMIN=$KEYCLOAK_ADMIN\" >> .env &&  echo \"KEYCLOAK_ADMIN_PASSWORD=$KEYCLOAK_ADMIN_PASSWORD\" >> .env"
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "cd $DEPLOY_DIR && docker compose -f docker-compose.yml --env-file .env pull"
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "cd $DEPLOY_DIR && docker compose -f docker-compose.yml --env-file .env down"
+    - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "cd $DEPLOY_DIR && docker compose -f docker-compose.yml --env-file .env up -d && rm .env"
+  environment:
+    name: production
+  only:
+    - tags
+  when: manual
