@@ -1,5 +1,6 @@
 # .gitlab-ci.yml
 stages:
+  - set_version
   - build
   - sonar
   - deploy_image_to_registry
@@ -14,11 +15,23 @@ default:
       alias: docker
       command: [ "--tls=false" ]
 
+include:
+  - project: $CI_PROJECT_NAMESPACE/pipelines
+    ref: main
+    file: templates/common/set_version.yml
+  - project: $CI_PROJECT_NAMESPACE/pipelines
+    ref: main
+    file: templates/common/deploy_image_to_registry.yml
+  - project: $CI_PROJECT_NAMESPACE/pipelines
+    ref: main
+    file: templates/common/container_scanning.yml
+
 # Variables d'environnement
 variables:
   NODE_ENV: production
   DOCKER_HOST: tcp://docker:2375
   DOCKER_TLS_CERTDIR: ""
+  SKIP_TO_DEPLOY: "false" # Valeur par défaut
 
 # Job pour construire l'application
 build:
@@ -60,37 +73,6 @@ sonarqube_scan:
     - sonar-scanner
   allow_failure: true
 
-# Job pour créer l'image Docker et la déployer
-deploy_image_to_registry:
-  stage: deploy_image_to_registry
-  script:
-    - export VERSION=$(echo "$CI_COMMIT_REF_SLUG" | tr '[:upper:]' '[:lower:]')
-    - docker build -t $CI_REGISTRY_IMAGE:$VERSION .
-    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
-    - docker push $CI_REGISTRY_IMAGE:$VERSION
-
-container_scanning:
-  stage: container_scanning
-  variables:
-    TRIVY_USERNAME: "$CI_REGISTRY_USER"
-    TRIVY_PASSWORD: "$CI_REGISTRY_PASSWORD"
-    TRIVY_AUTH_URL: "$CI_REGISTRY"
-    TRIVY_NO_PROGRESS: "true"
-    TRIVY_CACHE_DIR: ".trivycache/"
-  before_script:
-    - apk add --no-cache curl
-    - curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
-  script:
-    - export VERSION=$(echo "$CI_COMMIT_REF_SLUG" | tr '[:upper:]' '[:lower:]')
-    - FULL_IMAGE_NAME="$CI_REGISTRY_IMAGE:$VERSION"
-    - trivy --version
-    # - trivy image --download-db-only
-    - trivy image --exit-code 0 "$FULL_IMAGE_NAME"
-    - trivy image --exit-code 1 --severity CRITICAL "$FULL_IMAGE_NAME"
-  cache:
-    paths:
-      - .trivycache/
-  allow_failure: true
 
 # Étape manuelle pour nettoyer
 cleanup_image:

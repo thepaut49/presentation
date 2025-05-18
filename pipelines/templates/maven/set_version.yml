@@ -1,0 +1,18 @@
+spec:
+  inputs:
+    stage:
+      default: set_version
+      description: "Crée l'artifact version.txt"
+---
+
+set_version:
+  stage: set_version
+  extends: .maven
+  script:
+    - export VERSION=$(mvn -q -Dexec.executable=echo -Dexec.args='${project.version}' --non-recursive exec:exec)
+    - echo $VERSION > version.txt
+  artifacts:
+    paths:
+      - version.txt
+    expire_in: 7 days
+

@@ -1,0 +1,17 @@
+spec:
+  inputs:
+    stage:
+      default: set_version
+      description: "Crée l'artifact version.txt"
+---
+
+set_version:
+  stage: set_version
+  script:
+    - export VERSION=$(echo "$CI_COMMIT_REF_SLUG" | tr '[:upper:]' '[:lower:]')
+    - echo $VERSION > version.txt
+  artifacts:
+    paths:
+      - version.txt
+    expire_in: 7 days
+

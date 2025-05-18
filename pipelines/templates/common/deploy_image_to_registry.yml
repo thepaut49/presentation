@@ -1,0 +1,19 @@
+spec:
+  inputs:
+    stage:
+      default: deploy_image_to_registry
+      description: "Envoie de l'image docker sur le registry gitlab, , il faut mettre la version dans un artifact version.txt"
+---
+
+# Job pour créer l'image Docker et la déployer
+deploy_image_to_registry:
+  stage: deploy_image_to_registry
+  script:
+    - VERSION=$(cat version.txt)
+    - echo "Version = $VERSION"
+    - docker build -t $CI_REGISTRY_IMAGE:$VERSION .
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker push $CI_REGISTRY_IMAGE:$VERSION
+  rules:
+    - if: '$SKIP_TO_DEPLOY != "true"' # Ne s'exécute pas si SKIP_TO_DEPLOY est true
+
