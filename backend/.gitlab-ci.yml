@@ -6,15 +6,9 @@ default:
       command: [ "--tls=false" ]
 
 include:
-  - project: $CI_PROJECT_NAMESPACE/pipelines
-    ref: maven-pipeline
-    file: templates/maven/set_version.yml
-  - project: $CI_PROJECT_NAMESPACE/pipelines
-    ref: maven-pipeline
-    file: templates/common/deploy_image_to_registry.yml
-  - project: $CI_PROJECT_NAMESPACE/pipelines
-    ref: maven-pipeline
-    file: templates/common/container_scanning.yml
+  - component: $CI_SERVER_FQDN/$CI_PROJECT_NAMESPACE/components/maven/set_version@1.0.0
+  - component: $CI_SERVER_FQDN/$CI_PROJECT_NAMESPACE/components/common/deploy_image_to_registry@1.0.0
+  - component: $CI_SERVER_FQDN/$CI_PROJECT_NAMESPACE/components/common/container_scanning@1.0.0
 
 
 stages:
