@@ -53,6 +53,8 @@ compile:
     paths:
       - target/classes
     expire_in: 7 days
+  rules:
+    - if: '$SKIP_TO_DEPLOY != "true"' # Ne s'exécute pas si SKIP_TO_DEPLOY est true
 
 unit_tests:
   stage: compile
@@ -68,6 +70,8 @@ unit_tests:
       - target/surefire-reports
       - target/classes  # Ajouter classes compilées comme artefacts
     expire_in: 7 days
+  rules:
+    - if: '$SKIP_TO_DEPLOY != "true"' # Ne s'exécute pas si SKIP_TO_DEPLOY est true
 
 sonarqube_analysis:
   stage: sonarqube
@@ -77,6 +81,8 @@ sonarqube_analysis:
   dependencies:
     - compile
     - unit_tests
+  rules:
+    - if: '$SKIP_TO_DEPLOY != "true"' # Ne s'exécute pas si SKIP_TO_DEPLOY est true
 
 build_war:
   stage: compile
@@ -90,6 +96,8 @@ build_war:
     paths:
       - target/backend*.war  # Assurez-vous que le fichier WAR est bien inclus comme artefact
     expire_in: 7 days
+  rules:
+    - if: '$SKIP_TO_DEPLOY != "true"' # Ne s'exécute pas si SKIP_TO_DEPLOY est true
 
 deploy_war_to_nexus:
   stage: deploy_nexus
@@ -100,6 +108,8 @@ deploy_war_to_nexus:
     - build_war
     - compile
     - unit_tests
+  rules:
+    - if: '$SKIP_TO_DEPLOY != "true"' # Ne s'exécute pas si SKIP_TO_DEPLOY est true
 
 # Ajout du job pour la release
 release:
@@ -215,6 +225,7 @@ deploy_recette:
     - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "cd $DEPLOY_DIR && docker compose -f docker-compose.yml --env-file .env up -d && rm .env"
   dependencies:
     - deploy_image_to_registry
+    - set_version
   environment:
     name: recette
     url: https://backend.thepaut-antoine.ovh
@@ -259,6 +270,7 @@ deploy_prod:
     - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "cd $DEPLOY_DIR && docker compose -f docker-compose.yml --env-file .env up -d && rm .env"
   dependencies:
     - deploy_image_to_registry
+    - set_version
   environment:
     name: production
     url: https://backend.thepaut-antoine.ovh

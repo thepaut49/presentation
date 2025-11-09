@@ -48,12 +48,14 @@ build:
         - pnpm-lock.yaml
     paths:
       - .pnpm-store
+  rules:
+    - if: '$SKIP_TO_DEPLOY != "true"' # Ne s'exécute pas si SKIP_TO_DEPLOY est true
 
 
 # Job pour analyser le code avec SonarQube
 sonarqube_scan:
   stage: sonar
-  image: 
+  image:
     name: sonarsource/sonar-scanner-cli:5.0
     entrypoint: [""]
   variables:
@@ -63,9 +65,11 @@ sonarqube_scan:
     key: "${CI_JOB_NAME}"
     paths:
       - .sonar/cache
-  script: 
+  script:
     - sonar-scanner
   allow_failure: true
+  rules:
+    - if: '$SKIP_TO_DEPLOY != "true"' # Ne s'exécute pas si SKIP_TO_DEPLOY est true
 
 
 # Étape manuelle pour nettoyer
@@ -120,6 +124,7 @@ deploy_recette:
     - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "cd $DEPLOY_DIR && VERSION=$VERSION CI_REGISTRY_IMAGE=$CI_REGISTRY_IMAGE docker compose -f docker-compose.yml up -d"
   dependencies:
     - build
+    - set_version
   environment:
     name: recette
     url: https://frontend.thepaut-antoine.ovh
@@ -163,6 +168,7 @@ deploy_prod:
     - ssh -i ~/.ssh/id_rsa -p $SSH_PORT $VPS_USER_DEPLOY@$VPS_HOST "cd $DEPLOY_DIR && VERSION=$VERSION CI_REGISTRY_IMAGE=$CI_REGISTRY_IMAGE docker compose -f docker-compose.yml up -d"
   dependencies:
     - build
+    - set_version
   environment:
     name: production
     url: https://frontend.thepaut-antoine.ovh
